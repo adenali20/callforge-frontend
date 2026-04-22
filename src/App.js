@@ -2,7 +2,7 @@ function App() {
   return (
     <div style={{ textAlign: "center", marginTop: "50px" }}>
       <h1>🚀 CallForge-Deploy docker image</h1>
-      <p>Test deployment</p>
+      <p>K8 Deployment</p>
     </div>
   );
 }

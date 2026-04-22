@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: callforge-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: callforge-frontend
+  template:
+    metadata:
+      labels:
+        app: callforge-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: adenli/callforge-frontend:latest
+          ports:
+            - containerPort: 80
