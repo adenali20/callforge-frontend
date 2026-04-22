@@ -13,7 +13,9 @@ spec:
         app: callforge-frontend
     spec:
       containers:
+      
         - name: frontend
-          image: adenli/callforge-frontend:latest
+          image: adenli/callforge-frontend:v2
+          imagePullPolicy: Always
           ports:
             - containerPort: 80
