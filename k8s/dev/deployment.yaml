@@ -15,6 +15,6 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: adenli/callforge-frontend:d39bf16
+          image: adenli/callforge-frontend:a87c083
           ports:
             - containerPort: 80
