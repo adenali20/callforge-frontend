@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: callforge-frontend
+  namespace: qa
 spec:
   replicas: 1
   selector:
@@ -13,9 +14,7 @@ spec:
         app: callforge-frontend
     spec:
       containers:
-      
         - name: frontend
-          image: adenli/callforge-frontend:v2
-          imagePullPolicy: Always
+          image: adenli/callforge-frontend:d39bf16
           ports:
             - containerPort: 80
