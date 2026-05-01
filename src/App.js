@@ -12,7 +12,7 @@ const App = () => {
   const [remoteStreams, setRemoteStreams] = useState([]);
 
   useEffect(() => {
-    socketRef.current = io('http://192.168.0.105:3002');
+    socketRef.current = io('http://142.93.204.148:3002');
 
     socketRef.current.on('connect', () => {
       socketRef.current.emit('joinRoom', { roomId }, async ({ rtpCapabilities, existingProducers }) => {
