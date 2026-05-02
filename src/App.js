@@ -12,7 +12,7 @@ const App = () => {
   const [remoteStreams, setRemoteStreams] = useState([]);
 
   useEffect(() => {
-    socketRef.current = io('https://dev.adenali.com:3002');
+    socketRef.current = io('https://dev.adenali.com');
 
     socketRef.current.on('connect', () => {
       socketRef.current.emit('joinRoom', { roomId }, async ({ rtpCapabilities, existingProducers }) => {
