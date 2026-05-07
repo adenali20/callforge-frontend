@@ -1,0 +1,60 @@
+.room-container {
+    background-color: #111;
+    color: white;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.video-grid {
+    display: grid;
+    gap: 15px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    align-content: start;
+}
+
+.video-grid.high-density {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.video-container {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid #333;
+    transition: border 0.3s ease;
+}
+
+.video-container video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.video-container.active-speaker {
+    border: 2px solid #00ff00; /* Green glow for speaker */
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);
+}
+
+.name-tag {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(0, 0, 0, 0.6);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    z-index: 10;
+}
+
+.state-screen {
+    background-color: #111;
+    color: white;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+}
