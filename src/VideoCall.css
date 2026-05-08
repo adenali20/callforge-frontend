@@ -113,3 +113,9 @@
     min-width: 120px;
 }
 
+.video-container.screen-share {
+  grid-column: span 2; /* Makes the screen share larger */
+  background: #000;
+  border: 2px solid #007bff;
+}
+

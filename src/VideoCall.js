@@ -10,14 +10,13 @@ const VideoCall = () => {
     const [isAuthorized, setIsAuthorized] = useState(false);
     const [error, setError] = useState(null);
     const [passcodeInput, setPasscodeInput] = useState("");
-    
-    // UPDATED: Initialize username from localStorage
     const [username, setUsername] = useState(localStorage.getItem('preferredUsername') || "");
     const [isNameSet, setIsNameSet] = useState(!!localStorage.getItem('preferredUsername'));
     
     const [activeSpeakerName, setActiveSpeakerName] = useState(null);
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
+    const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [copySuccess, setCopySuccess] = useState(false);
 
     const localVideoRef = useRef();
@@ -25,7 +24,9 @@ const VideoCall = () => {
     const deviceRef = useRef();
     const sendTransportRef = useRef();
     const recvTransportRef = useRef();
-    const [peers, setPeers] = useState({});
+    const screenProducerRef = useRef(null);
+    
+    const [peers, setPeers] = useState({}); 
 
     useEffect(() => {
         fetch(`https://dev.adenali.com/api/rooms/${roomId}`)
@@ -42,23 +43,19 @@ const VideoCall = () => {
 
     useEffect(() => {
         if (isNameSet && isAuthorized && roomData && roomId) {
-            // Save room to history
             const history = JSON.parse(localStorage.getItem('roomHistory') || '[]');
             const filtered = history.filter(item => item.id !== roomId);
-            const updated = [
-                { id: roomId, name: roomData.roomName, timestamp: Date.now() },
-                ...filtered
-            ].slice(0, 5);
+            const updated = [{ id: roomId, name: roomData.roomName, timestamp: Date.now() }, ...filtered].slice(0, 5);
             localStorage.setItem('roomHistory', JSON.stringify(updated));
-            
-            // NEW: Save username to localStorage for future use
             localStorage.setItem('preferredUsername', username);
         }
     }, [isNameSet, isAuthorized, roomData, roomId, username]);
 
     useEffect(() => {
         if (!isAuthorized || !isNameSet || !roomData) return;
+
         socketRef.current = io(roomData.mediaNodeUrl);
+
         socketRef.current.on('connect', () => {
             socketRef.current.emit('joinRoom', { roomId, username }, async ({ rtpCapabilities, existingProducers }) => {
                 const device = new Device();
@@ -90,8 +87,13 @@ const VideoCall = () => {
             setPeers((prev) => {
                 const newPeers = { ...prev };
                 for (const name in newPeers) {
-                    if (newPeers[name].videoId === producerId || newPeers[name].audioId === producerId) {
-                        delete newPeers[name];
+                    if (newPeers[name].videoId === producerId || newPeers[name].audioId === producerId || newPeers[name].screenId === producerId) {
+                        if (newPeers[name].screenId === producerId) {
+                            newPeers[name].screenStream = null;
+                            newPeers[name].screenId = null;
+                        } else {
+                            delete newPeers[name];
+                        }
                     }
                 }
                 return newPeers;
@@ -114,10 +116,31 @@ const VideoCall = () => {
         return () => socketRef.current.disconnect();
     }, [isAuthorized, isNameSet, roomData]);
 
-    const copyInviteLink = () => {
-        navigator.clipboard.writeText(window.location.href);
-        setCopySuccess(true);
-        setTimeout(() => setCopySuccess(false), 2000);
+    const toggleScreenShare = async () => {
+        if (!isScreenSharing) {
+            try {
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                const track = stream.getVideoTracks()[0];
+
+                screenProducerRef.current = await sendTransportRef.current.produce({ track });
+                setIsScreenSharing(true);
+
+                track.onended = () => stopScreenShare();
+            } catch (err) {
+                console.error("Screen share failed", err);
+            }
+        } else {
+            stopScreenShare();
+        }
+    };
+
+    const stopScreenShare = () => {
+        if (screenProducerRef.current) {
+            socketRef.current.emit('producerClosed', { producerId: screenProducerRef.current.id });
+            screenProducerRef.current.close();
+            screenProducerRef.current = null;
+        }
+        setIsScreenSharing(false);
     };
 
     const toggleMic = () => {
@@ -140,21 +163,45 @@ const VideoCall = () => {
 
     const consumeStream = async (remoteProducerId, remoteUsername) => {
         const { rtpCapabilities } = deviceRef.current;
-        if (!recvTransportRef.current) return;
         socketRef.current.emit('consume', { rtpCapabilities, remoteProducerId, transportId: recvTransportRef.current.id }, async ({ params }) => {
             const consumer = await recvTransportRef.current.consume(params);
             socketRef.current.emit('consumerResume', { consumerId: consumer.id });
+
             setPeers((prev) => {
-                const existingPeer = prev[remoteUsername] || { username: remoteUsername, stream: new MediaStream(), videoId: null, audioId: null, videoPaused: false, audioPaused: false };
-                existingPeer.stream.addTrack(consumer.track);
-                if (consumer.kind === 'video') existingPeer.videoId = remoteProducerId;
-                if (consumer.kind === 'audio') existingPeer.audioId = remoteProducerId;
+                const existingPeer = prev[remoteUsername] || { 
+                    username: remoteUsername, 
+                    stream: new MediaStream(), 
+                    screenStream: null,
+                    videoId: null, 
+                    audioId: null,
+                    screenId: null
+                };
+
+                if (consumer.kind === 'video') {
+                    if (existingPeer.videoId && existingPeer.videoId !== remoteProducerId) {
+                        existingPeer.screenStream = new MediaStream([consumer.track]);
+                        existingPeer.screenId = remoteProducerId;
+                    } else {
+                        existingPeer.stream.addTrack(consumer.track);
+                        existingPeer.videoId = remoteProducerId;
+                    }
+                } else {
+                    existingPeer.stream.addTrack(consumer.track);
+                    existingPeer.audioId = remoteProducerId;
+                }
+
                 return { ...prev, [remoteUsername]: { ...existingPeer } };
             });
+
             consumer.on('producerclose', () => {
                 setPeers(prev => {
                     const newPeers = { ...prev };
-                    delete newPeers[remoteUsername];
+                    if (newPeers[remoteUsername]?.screenId === remoteProducerId) {
+                        newPeers[remoteUsername].screenStream = null;
+                        newPeers[remoteUsername].screenId = null;
+                    } else {
+                        delete newPeers[remoteUsername];
+                    }
                     return newPeers;
                 });
             });
@@ -198,8 +245,14 @@ const VideoCall = () => {
         });
     };
 
+    const copyInviteLink = () => {
+        navigator.clipboard.writeText(window.location.href);
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
+    };
+
     const handleVerifyPasscode = async () => {
-        const res = await fetch(`https://dev.adenali.com/api/rooms/${roomId}/verify`, {
+        const res = await fetch(`https://adenali.com{roomId}/verify`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ passcode: passcodeInput })
@@ -210,38 +263,6 @@ const VideoCall = () => {
 
     if (error) return <div className="state-screen">Error: {error}</div>;
     if (!roomData) return <div className="state-screen">Loading Room...</div>;
-
-    if (roomData.status === "EARLY") {
-        return (
-            <div className="state-screen">
-                {roomData.isNonExpiry ? (
-                    <>
-                        <h2>Starting ASAP...</h2>
-                        <p>Preparing your secure media session.</p>
-                    </>
-                ) : (
-                    <>
-                        <h2>Too Early!</h2>
-                        <p>Meeting starts at: {new Date(roomData.startDate).toLocaleString()}</p>
-                    </>
-                )}
-            </div>
-        );
-    }
-
-    if (roomData.status === "EXPIRED") {
-        return <div className="state-screen"><h2>Meeting Ended</h2><p>This room has expired.</p></div>;
-    }
-
-    if (roomData.isSecure && !isAuthorized) {
-        return (
-            <div className="state-screen">
-                <h3>Enter Passcode</h3>
-                <input type="password" value={passcodeInput} onChange={e => setPasscodeInput(e.target.value)} />
-                <button onClick={handleVerifyPasscode}>Verify</button>
-            </div>
-        );
-    }
 
     if (!isNameSet) {
         return (
@@ -261,21 +282,13 @@ const VideoCall = () => {
             <div className="room-header">
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
                     <h1 className="room-title">Room: {roomData.roomName}</h1>
-                    {/* NEW: Button to change name if auto-populated */}
-                    <button onClick={() => setIsNameSet(false)} style={{ background: 'none', border: 'none', color: '#007bff', cursor: 'pointer', fontSize: '12px' }}>
-                        (Change Name)
-                    </button>
+                    <button onClick={() => setIsNameSet(false)} style={{ background: 'none', border: 'none', color: '#007bff', cursor: 'pointer', fontSize: '12px' }}>(Change Name)</button>
                 </div>
                 <div className="controls">
-                    <button onClick={copyInviteLink} className="control-btn invite-btn">
-                        {copySuccess ? '✅ Copied' : '🔗 Copy Link'}
-                    </button>
-                    <button onClick={toggleMic} className={`control-btn ${!isMicOn ? 'off' : ''}`}>
-                        {isMicOn ? '🎤 Mute' : '🎙️ Unmute'}
-                    </button>
-                    <button onClick={toggleVideo} className={`control-btn ${!isVideoOn ? 'off' : ''}`}>
-                        {isVideoOn ? '📹 Stop Video' : '📷 Start Video'}
-                    </button>
+                    <button onClick={copyInviteLink} className="control-btn invite-btn">{copySuccess ? '✅ Copied' : '🔗 Copy Link'}</button>
+                    <button onClick={toggleScreenShare} className={`control-btn ${isScreenSharing ? 'on' : ''}`}>{isScreenSharing ? '🛑 Stop Share' : '🖥️ Share'}</button>
+                    <button onClick={toggleMic} className={`control-btn ${!isMicOn ? 'off' : ''}`}>{isMicOn ? '🎤 Mute' : '🎙️ Unmute'}</button>
+                    <button onClick={toggleVideo} className={`control-btn ${!isVideoOn ? 'off' : ''}`}>{isVideoOn ? '📹 Stop' : '📷 Start'}</button>
                 </div>
             </div>
             <div className={gridClass}>
@@ -285,11 +298,19 @@ const VideoCall = () => {
                     <video ref={localVideoRef} autoPlay muted playsInline />
                 </div>
                 {peerList.map((peer) => (
-                    <div key={peer.username} className={`video-container ${activeSpeakerName === peer.username ? 'active-speaker' : ''} ${peer.videoPaused ? 'video-off' : ''}`}>
-                        <div className="name-tag">{peer.username} {peer.audioPaused && '🔇'}</div>
-                        {peer.videoPaused && <div className="avatar">{peer.username.charAt(0).toUpperCase()}</div>}
-                        <VideoComponent stream={peer.stream} />
-                    </div>
+                    <React.Fragment key={peer.username}>
+                        <div className={`video-container ${activeSpeakerName === peer.username ? 'active-speaker' : ''} ${peer.videoPaused ? 'video-off' : ''}`}>
+                            <div className="name-tag">{peer.username} {peer.audioPaused && '🔇'}</div>
+                            {peer.videoPaused && <div className="avatar">{peer.username.charAt(0).toUpperCase()}</div>}
+                            <VideoComponent stream={peer.stream} />
+                        </div>
+                        {peer.screenStream && (
+                            <div className="video-container screen-share">
+                                <div className="name-tag">{peer.username}'s Screen</div>
+                                <VideoComponent stream={peer.screenStream} />
+                            </div>
+                        )}
+                    </React.Fragment>
                 ))}
             </div>
         </div>
