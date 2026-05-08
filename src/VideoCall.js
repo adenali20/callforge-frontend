@@ -10,12 +10,9 @@ const VideoCall = () => {
     const [isAuthorized, setIsAuthorized] = useState(false);
     const [error, setError] = useState(null);
     const [passcodeInput, setPasscodeInput] = useState("");
-    
-    // Persistent Username
     const [username, setUsername] = useState(localStorage.getItem('preferredUsername') || "");
     const [isNameSet, setIsNameSet] = useState(!!localStorage.getItem('preferredUsername'));
     
-    // UI States
     const [activeSpeakerName, setActiveSpeakerName] = useState(null);
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
@@ -23,7 +20,6 @@ const VideoCall = () => {
     const [copySuccess, setCopySuccess] = useState(false);
     const [canShareScreen, setCanShareScreen] = useState(false);
 
-    // Refs
     const localVideoRef = useRef();
     const socketRef = useRef();
     const deviceRef = useRef();
@@ -32,17 +28,14 @@ const VideoCall = () => {
     const screenProducerRef = useRef(null);
     const screenAudioProducerRef = useRef(null);
     
-    // Peers State: { "Name": { stream, screenStream, videoId, audioId, screenId, videoPaused, audioPaused } }
     const [peers, setPeers] = useState({}); 
 
-    // Detect if screen sharing is supported (Mobile detection)
     useEffect(() => {
         if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
             setCanShareScreen(true);
         }
     }, []);
 
-    // PHASE 1: Validate Room & Save History
     useEffect(() => {
         fetch(`https://dev.adenali.com/api/rooms/${roomId}`)
             .then(res => {
@@ -66,7 +59,6 @@ const VideoCall = () => {
         }
     }, [isNameSet, isAuthorized, roomData, roomId, username]);
 
-    // PHASE 2: Signaling Setup
     useEffect(() => {
         if (!isAuthorized || !isNameSet || !roomData) return;
 
@@ -99,6 +91,7 @@ const VideoCall = () => {
             });
         });
 
+        // LISTENER: Detect closed producers from others
         socketRef.current.on('producerClosed', ({ producerId }) => {
             handleProducerClosed(producerId);
         });
@@ -119,15 +112,18 @@ const VideoCall = () => {
         return () => socketRef.current.disconnect();
     }, [isAuthorized, isNameSet, roomData]);
 
+    // CORE LOGIC: Removes screen share frame or whole user
     const handleProducerClosed = (producerId) => {
         setPeers((prev) => {
             const newPeers = { ...prev };
             for (const name in newPeers) {
+                // If the closed ID was a screen share, just nullify the screen portion
                 if (newPeers[name].screenId === producerId) {
                     newPeers[name].screenStream = null;
                     newPeers[name].screenId = null;
                     return { ...newPeers };
                 } 
+                // If it was main camera/audio, remove the user entirely
                 if (newPeers[name].videoId === producerId || newPeers[name].audioId === producerId) {
                     delete newPeers[name];
                     return { ...newPeers };
@@ -152,7 +148,10 @@ const VideoCall = () => {
 
                 setIsScreenSharing(true);
 
-                videoTrack.onended = () => stopScreenShare();
+                // Handle clicking "Stop Sharing" in browser bar
+                videoTrack.onended = () => {
+                    stopScreenShare();
+                };
             } catch (err) {
                 console.error("Screen share failed", err);
             }
@@ -163,6 +162,7 @@ const VideoCall = () => {
 
     const stopScreenShare = () => {
         if (screenProducerRef.current) {
+            // Tell server so others remove the frame
             socketRef.current.emit('producerClosed', { producerId: screenProducerRef.current.id });
             screenProducerRef.current.close();
             screenProducerRef.current = null;
@@ -176,20 +176,20 @@ const VideoCall = () => {
     };
 
     const toggleMic = () => {
-        const track = localVideoRef.current.srcObject.getAudioTracks()[0];
-        if (track) {
-            track.enabled = !track.enabled;
-            setIsMicOn(track.enabled);
-            socketRef.current.emit('toggleMedia', { kind: 'audio', isPaused: !track.enabled });
+        const tracks = localVideoRef.current.srcObject.getAudioTracks();
+        if (tracks[0]) {
+            tracks[0].enabled = !tracks[0].enabled;
+            setIsMicOn(tracks[0].enabled);
+            socketRef.current.emit('toggleMedia', { kind: 'audio', isPaused: !tracks[0].enabled });
         }
     };
 
     const toggleVideo = () => {
-        const track = localVideoRef.current.srcObject.getVideoTracks()[0];
-        if (track) {
-            track.enabled = !track.enabled;
-            setIsVideoOn(track.enabled);
-            socketRef.current.emit('toggleMedia', { kind: 'video', isPaused: !track.enabled });
+        const tracks = localVideoRef.current.srcObject.getVideoTracks();
+        if (tracks[0]) {
+            tracks[0].enabled = !tracks[0].enabled;
+            setIsVideoOn(tracks[0].enabled);
+            socketRef.current.emit('toggleMedia', { kind: 'video', isPaused: !tracks[0].enabled });
         }
     };
 
@@ -206,6 +206,7 @@ const VideoCall = () => {
                 };
 
                 if (consumer.kind === 'video') {
+                    // Check if user already has video (then this must be a screen)
                     if (existingPeer.videoId && existingPeer.videoId !== remoteProducerId) {
                         existingPeer.screenStream = new MediaStream([consumer.track]);
                         existingPeer.screenId = remoteProducerId;
@@ -220,6 +221,7 @@ const VideoCall = () => {
                 return { ...prev, [remoteUsername]: { ...existingPeer } };
             });
 
+            // Media-level cleanup
             consumer.on('producerclose', () => handleProducerClosed(remoteProducerId));
         });
     };
@@ -308,7 +310,7 @@ const VideoCall = () => {
             <div className="room-header">
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
                     <h1 className="room-title">Room: {roomData.roomName}</h1>
-                    <button onClick={() => setIsNameSet(false)} style={{ background: 'none', border: 'none', color: '#007bff', cursor: 'pointer', fontSize: '12px' }}>(Change Name)</button>
+                    <button onClick={() => setIsNameSet(false)} className="change-name-btn">(Change Name)</button>
                 </div>
                 <div className="controls">
                     <button onClick={copyInviteLink} className="control-btn invite-btn">{copySuccess ? '✅ Copied' : '🔗 Copy Link'}</button>
@@ -320,11 +322,13 @@ const VideoCall = () => {
                 </div>
             </div>
             <div className={gridClass}>
+                {/* Local View */}
                 <div className={`video-container ${!isVideoOn ? 'video-off' : ''}`}>
                     <div className="name-tag">You ({username}) {!isMicOn && '🔇'}</div>
                     {!isVideoOn && <div className="avatar">{username.charAt(0).toUpperCase()}</div>}
                     <video ref={localVideoRef} autoPlay muted playsInline />
                 </div>
+                {/* Remote Views */}
                 {peerList.map((peer) => (
                     <React.Fragment key={peer.username}>
                         <div className={`video-container ${activeSpeakerName === peer.username ? 'active-speaker' : ''} ${peer.videoPaused ? 'video-off' : ''}`}>
