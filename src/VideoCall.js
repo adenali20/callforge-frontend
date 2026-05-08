@@ -25,6 +25,7 @@ const VideoCall = () => {
     const sendTransportRef = useRef();
     const recvTransportRef = useRef();
     const screenProducerRef = useRef(null);
+    const screenAudioProducerRef = useRef(null); // Track screen audio
     
     const [peers, setPeers] = useState({}); 
 
@@ -119,13 +120,26 @@ const VideoCall = () => {
     const toggleScreenShare = async () => {
         if (!isScreenSharing) {
             try {
-                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-                const track = stream.getVideoTracks()[0];
+                // UPDATED: Added audio constraint for screen capture
+                const stream = await navigator.mediaDevices.getDisplayMedia({ 
+                    video: true, 
+                    audio: true 
+                });
 
-                screenProducerRef.current = await sendTransportRef.current.produce({ track });
+                const videoTrack = stream.getVideoTracks()[0];
+                const audioTrack = stream.getAudioTracks()[0];
+
+                // Produce Video
+                screenProducerRef.current = await sendTransportRef.current.produce({ track: videoTrack });
+
+                // UPDATED: Produce Audio if available
+                if (audioTrack) {
+                    screenAudioProducerRef.current = await sendTransportRef.current.produce({ track: audioTrack });
+                }
+
                 setIsScreenSharing(true);
 
-                track.onended = () => stopScreenShare();
+                videoTrack.onended = () => stopScreenShare();
             } catch (err) {
                 console.error("Screen share failed", err);
             }
@@ -139,6 +153,11 @@ const VideoCall = () => {
             socketRef.current.emit('producerClosed', { producerId: screenProducerRef.current.id });
             screenProducerRef.current.close();
             screenProducerRef.current = null;
+        }
+        if (screenAudioProducerRef.current) {
+            socketRef.current.emit('producerClosed', { producerId: screenAudioProducerRef.current.id });
+            screenAudioProducerRef.current.close();
+            screenAudioProducerRef.current = null;
         }
         setIsScreenSharing(false);
     };
@@ -178,6 +197,7 @@ const VideoCall = () => {
                 };
 
                 if (consumer.kind === 'video') {
+                    // Detect if this is a screen share (secondary video producer)
                     if (existingPeer.videoId && existingPeer.videoId !== remoteProducerId) {
                         existingPeer.screenStream = new MediaStream([consumer.track]);
                         existingPeer.screenId = remoteProducerId;
@@ -186,6 +206,7 @@ const VideoCall = () => {
                         existingPeer.videoId = remoteProducerId;
                     }
                 } else {
+                    // Audio tracks are added to the main stream to ensure they play
                     existingPeer.stream.addTrack(consumer.track);
                     existingPeer.audioId = remoteProducerId;
                 }
@@ -199,7 +220,7 @@ const VideoCall = () => {
                     if (newPeers[remoteUsername]?.screenId === remoteProducerId) {
                         newPeers[remoteUsername].screenStream = null;
                         newPeers[remoteUsername].screenId = null;
-                    } else {
+                    } else if (newPeers[remoteUsername]?.audioId === remoteProducerId || newPeers[remoteUsername]?.videoId === remoteProducerId) {
                         delete newPeers[remoteUsername];
                     }
                     return newPeers;
@@ -219,8 +240,10 @@ const VideoCall = () => {
                 transport.on('produce', async ({ kind, rtpParameters }, callback) => {
                     socketRef.current.emit('produce', { transportId: transport.id, kind, rtpParameters }, ({ id }) => callback({ id }));
                 });
+                
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 localVideoRef.current.srcObject = stream;
+                
                 if (stream.getVideoTracks().length > 0) {
                     await transport.produce({ track: stream.getVideoTracks()[0], encodings: [{ maxBitrate: 100000, scaleResolutionDownBy: 4 }, { maxBitrate: 300000, scaleResolutionDownBy: 2 }, { maxBitrate: 900000 }] });
                 }
@@ -320,6 +343,7 @@ const VideoCall = () => {
 const VideoComponent = ({ stream }) => {
     const ref = useRef();
     useEffect(() => { if (ref.current) ref.current.srcObject = stream; }, [stream]);
+    // Mute is false by default so remote audio (including screen audio) is heard
     return <video ref={ref} autoPlay playsInline />;
 };
 
