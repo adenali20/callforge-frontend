@@ -10,20 +10,22 @@ const VideoCall = () => {
     const [isAuthorized, setIsAuthorized] = useState(false);
     const [error, setError] = useState(null);
     const [passcodeInput, setPasscodeInput] = useState("");
-    const [username, setUsername] = useState("");
-    const [isNameSet, setIsNameSet] = useState(false);
+    
+    // UPDATED: Initialize username from localStorage
+    const [username, setUsername] = useState(localStorage.getItem('preferredUsername') || "");
+    const [isNameSet, setIsNameSet] = useState(!!localStorage.getItem('preferredUsername'));
+    
     const [activeSpeakerName, setActiveSpeakerName] = useState(null);
-
-    // NEW: Local Media States
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
+    const [copySuccess, setCopySuccess] = useState(false);
 
     const localVideoRef = useRef();
     const socketRef = useRef();
     const deviceRef = useRef();
     const sendTransportRef = useRef();
     const recvTransportRef = useRef();
-    const [peers, setPeers] = useState({}); 
+    const [peers, setPeers] = useState({});
 
     useEffect(() => {
         fetch(`https://dev.adenali.com/api/rooms/${roomId}`)
@@ -39,19 +41,31 @@ const VideoCall = () => {
     }, [roomId]);
 
     useEffect(() => {
+        if (isNameSet && isAuthorized && roomData && roomId) {
+            // Save room to history
+            const history = JSON.parse(localStorage.getItem('roomHistory') || '[]');
+            const filtered = history.filter(item => item.id !== roomId);
+            const updated = [
+                { id: roomId, name: roomData.roomName, timestamp: Date.now() },
+                ...filtered
+            ].slice(0, 5);
+            localStorage.setItem('roomHistory', JSON.stringify(updated));
+            
+            // NEW: Save username to localStorage for future use
+            localStorage.setItem('preferredUsername', username);
+        }
+    }, [isNameSet, isAuthorized, roomData, roomId, username]);
+
+    useEffect(() => {
         if (!isAuthorized || !isNameSet || !roomData) return;
-
         socketRef.current = io(roomData.mediaNodeUrl);
-
         socketRef.current.on('connect', () => {
             socketRef.current.emit('joinRoom', { roomId, username }, async ({ rtpCapabilities, existingProducers }) => {
                 const device = new Device();
                 await device.load({ routerRtpCapabilities: rtpCapabilities });
                 deviceRef.current = device;
-
                 await createSendTransport();
                 await createRecvTransport();
-
                 if (existingProducers) {
                     existingProducers.forEach(p => consumeStream(p.id, p.username));
                 }
@@ -62,7 +76,6 @@ const VideoCall = () => {
             consumeStream(producerId, username);
         });
 
-        // NEW: Listener for remote mute/video toggle
         socketRef.current.on('peerLayerUpdate', ({ username: peerName, kind, isPaused }) => {
             setPeers(prev => {
                 if (!prev[peerName]) return prev;
@@ -101,7 +114,12 @@ const VideoCall = () => {
         return () => socketRef.current.disconnect();
     }, [isAuthorized, isNameSet, roomData]);
 
-    // NEW: Toggle Handlers
+    const copyInviteLink = () => {
+        navigator.clipboard.writeText(window.location.href);
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
+    };
+
     const toggleMic = () => {
         const audioTrack = localVideoRef.current.srcObject.getAudioTracks()[0];
         if (audioTrack) {
@@ -123,28 +141,16 @@ const VideoCall = () => {
     const consumeStream = async (remoteProducerId, remoteUsername) => {
         const { rtpCapabilities } = deviceRef.current;
         if (!recvTransportRef.current) return;
-
         socketRef.current.emit('consume', { rtpCapabilities, remoteProducerId, transportId: recvTransportRef.current.id }, async ({ params }) => {
             const consumer = await recvTransportRef.current.consume(params);
             socketRef.current.emit('consumerResume', { consumerId: consumer.id });
-
             setPeers((prev) => {
-                const existingPeer = prev[remoteUsername] || { 
-                    username: remoteUsername, 
-                    stream: new MediaStream(), 
-                    videoId: null, 
-                    audioId: null,
-                    videoPaused: false,
-                    audioPaused: false
-                };
-
+                const existingPeer = prev[remoteUsername] || { username: remoteUsername, stream: new MediaStream(), videoId: null, audioId: null, videoPaused: false, audioPaused: false };
                 existingPeer.stream.addTrack(consumer.track);
                 if (consumer.kind === 'video') existingPeer.videoId = remoteProducerId;
                 if (consumer.kind === 'audio') existingPeer.audioId = remoteProducerId;
-
                 return { ...prev, [remoteUsername]: { ...existingPeer } };
             });
-
             consumer.on('producerclose', () => {
                 setPeers(prev => {
                     const newPeers = { ...prev };
@@ -166,19 +172,10 @@ const VideoCall = () => {
                 transport.on('produce', async ({ kind, rtpParameters }, callback) => {
                     socketRef.current.emit('produce', { transportId: transport.id, kind, rtpParameters }, ({ id }) => callback({ id }));
                 });
-
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 localVideoRef.current.srcObject = stream;
-
                 if (stream.getVideoTracks().length > 0) {
-                    await transport.produce({ 
-                        track: stream.getVideoTracks()[0],
-                        encodings: [
-                            { maxBitrate: 100000, scaleResolutionDownBy: 4 },
-                            { maxBitrate: 300000, scaleResolutionDownBy: 2 },
-                            { maxBitrate: 900000 }
-                        ]
-                    });
+                    await transport.produce({ track: stream.getVideoTracks()[0], encodings: [{ maxBitrate: 100000, scaleResolutionDownBy: 4 }, { maxBitrate: 300000, scaleResolutionDownBy: 2 }, { maxBitrate: 900000 }] });
                 }
                 if (stream.getAudioTracks().length > 0) {
                     await transport.produce({ track: stream.getAudioTracks()[0] });
@@ -214,6 +211,29 @@ const VideoCall = () => {
     if (error) return <div className="state-screen">Error: {error}</div>;
     if (!roomData) return <div className="state-screen">Loading Room...</div>;
 
+    if (roomData.status === "EARLY") {
+        return (
+            <div className="state-screen">
+                <h2>Too Early!</h2>
+                <p>Meeting starts at: {new Date(roomData.startDate).toLocaleString()}</p>
+            </div>
+        );
+    }
+
+    if (roomData.status === "EXPIRED") {
+        return <div className="state-screen"><h2>Meeting Ended</h2><p>This room has expired.</p></div>;
+    }
+
+    if (roomData.isSecure && !isAuthorized) {
+        return (
+            <div className="state-screen">
+                <h3>Enter Passcode</h3>
+                <input type="password" value={passcodeInput} onChange={e => setPasscodeInput(e.target.value)} />
+                <button onClick={handleVerifyPasscode}>Verify</button>
+            </div>
+        );
+    }
+
     if (!isNameSet) {
         return (
             <div className="state-screen">
@@ -230,8 +250,17 @@ const VideoCall = () => {
     return (
         <div className="room-container">
             <div className="room-header">
-                <h1 className="room-title">Room: {roomData.roomName}</h1>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                    <h1 className="room-title">Room: {roomData.roomName}</h1>
+                    {/* NEW: Button to change name if auto-populated */}
+                    <button onClick={() => setIsNameSet(false)} style={{ background: 'none', border: 'none', color: '#007bff', cursor: 'pointer', fontSize: '12px' }}>
+                        (Change Name)
+                    </button>
+                </div>
                 <div className="controls">
+                    <button onClick={copyInviteLink} className="control-btn invite-btn">
+                        {copySuccess ? '✅ Copied' : '🔗 Copy Link'}
+                    </button>
                     <button onClick={toggleMic} className={`control-btn ${!isMicOn ? 'off' : ''}`}>
                         {isMicOn ? '🎤 Mute' : '🎙️ Unmute'}
                     </button>
@@ -240,7 +269,6 @@ const VideoCall = () => {
                     </button>
                 </div>
             </div>
-
             <div className={gridClass}>
                 <div className={`video-container ${!isVideoOn ? 'video-off' : ''}`}>
                     <div className="name-tag">You ({username}) {!isMicOn && '🔇'}</div>

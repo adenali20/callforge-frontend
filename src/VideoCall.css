@@ -99,4 +99,17 @@
     background: #333;
     color: #aaa;
 }
+.control-btn.invite {
+    background: #007bff;
+    transition: background 0.3s ease;
+}
+
+.control-btn.invite:hover {
+    background: #0056b3;
+}
+
+/* Optional: Animation for the "Copied" state */
+.control-btn.invite {
+    min-width: 120px;
+}
 
