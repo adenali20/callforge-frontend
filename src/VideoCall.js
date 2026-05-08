@@ -10,9 +10,12 @@ const VideoCall = () => {
     const [isAuthorized, setIsAuthorized] = useState(false);
     const [error, setError] = useState(null);
     const [passcodeInput, setPasscodeInput] = useState("");
+    
+    // Persistent Username
     const [username, setUsername] = useState(localStorage.getItem('preferredUsername') || "");
     const [isNameSet, setIsNameSet] = useState(!!localStorage.getItem('preferredUsername'));
     
+    // UI & Media States
     const [activeSpeakerName, setActiveSpeakerName] = useState(null);
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
@@ -20,6 +23,7 @@ const VideoCall = () => {
     const [copySuccess, setCopySuccess] = useState(false);
     const [canShareScreen, setCanShareScreen] = useState(false);
 
+    // Refs
     const localVideoRef = useRef();
     const socketRef = useRef();
     const deviceRef = useRef();
@@ -28,14 +32,17 @@ const VideoCall = () => {
     const screenProducerRef = useRef(null);
     const screenAudioProducerRef = useRef(null);
     
+    // Peers State
     const [peers, setPeers] = useState({}); 
 
+    // Detect Screen Share Support
     useEffect(() => {
         if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
             setCanShareScreen(true);
         }
     }, []);
 
+    // PHASE 1: Validate Room & Save History
     useEffect(() => {
         fetch(`https://dev.adenali.com/api/rooms/${roomId}`)
             .then(res => {
@@ -59,6 +66,7 @@ const VideoCall = () => {
         }
     }, [isNameSet, isAuthorized, roomData, roomId, username]);
 
+    // PHASE 2: Signaling Setup
     useEffect(() => {
         if (!isAuthorized || !isNameSet || !roomData) return;
 
@@ -91,7 +99,6 @@ const VideoCall = () => {
             });
         });
 
-        // LISTENER: Detect closed producers from others
         socketRef.current.on('producerClosed', ({ producerId }) => {
             handleProducerClosed(producerId);
         });
@@ -112,19 +119,20 @@ const VideoCall = () => {
         return () => socketRef.current.disconnect();
     }, [isAuthorized, isNameSet, roomData]);
 
-    // CORE LOGIC: Removes screen share frame or whole user
+    // FIXED: Refined cleanup logic to separate screen share from user exit
     const handleProducerClosed = (producerId) => {
         setPeers((prev) => {
             const newPeers = { ...prev };
             for (const name in newPeers) {
-                // If the closed ID was a screen share, just nullify the screen portion
-                if (newPeers[name].screenId === producerId) {
-                    newPeers[name].screenStream = null;
-                    newPeers[name].screenId = null;
+                const peer = newPeers[name];
+                
+                // IF it's the screen share that closed, only nullify the screen part
+                if (peer.screenId === producerId) {
+                    newPeers[name] = { ...peer, screenStream: null, screenId: null };
                     return { ...newPeers };
                 } 
-                // If it was main camera/audio, remove the user entirely
-                if (newPeers[name].videoId === producerId || newPeers[name].audioId === producerId) {
+                // IF it's the main video/audio, the user has left
+                if (peer.videoId === producerId || peer.audioId === producerId) {
                     delete newPeers[name];
                     return { ...newPeers };
                 }
@@ -141,17 +149,12 @@ const VideoCall = () => {
                 const audioTrack = stream.getAudioTracks()[0];
 
                 screenProducerRef.current = await sendTransportRef.current.produce({ track: videoTrack });
-
                 if (audioTrack) {
                     screenAudioProducerRef.current = await sendTransportRef.current.produce({ track: audioTrack });
                 }
 
                 setIsScreenSharing(true);
-
-                // Handle clicking "Stop Sharing" in browser bar
-                videoTrack.onended = () => {
-                    stopScreenShare();
-                };
+                videoTrack.onended = () => stopScreenShare();
             } catch (err) {
                 console.error("Screen share failed", err);
             }
@@ -162,10 +165,12 @@ const VideoCall = () => {
 
     const stopScreenShare = () => {
         if (screenProducerRef.current) {
-            // Tell server so others remove the frame
-            socketRef.current.emit('producerClosed', { producerId: screenProducerRef.current.id });
+            const idToRemove = screenProducerRef.current.id;
+            socketRef.current.emit('producerClosed', { producerId: idToRemove });
             screenProducerRef.current.close();
             screenProducerRef.current = null;
+            // Clean up local view if necessary
+            handleProducerClosed(idToRemove);
         }
         if (screenAudioProducerRef.current) {
             socketRef.current.emit('producerClosed', { producerId: screenAudioProducerRef.current.id });
@@ -176,20 +181,20 @@ const VideoCall = () => {
     };
 
     const toggleMic = () => {
-        const tracks = localVideoRef.current.srcObject.getAudioTracks();
-        if (tracks[0]) {
-            tracks[0].enabled = !tracks[0].enabled;
-            setIsMicOn(tracks[0].enabled);
-            socketRef.current.emit('toggleMedia', { kind: 'audio', isPaused: !tracks[0].enabled });
+        const track = localVideoRef.current.srcObject.getAudioTracks()[0];
+        if (track) {
+            track.enabled = !track.enabled;
+            setIsMicOn(track.enabled);
+            socketRef.current.emit('toggleMedia', { kind: 'audio', isPaused: !track.enabled });
         }
     };
 
     const toggleVideo = () => {
-        const tracks = localVideoRef.current.srcObject.getVideoTracks();
-        if (tracks[0]) {
-            tracks[0].enabled = !tracks[0].enabled;
-            setIsVideoOn(tracks[0].enabled);
-            socketRef.current.emit('toggleMedia', { kind: 'video', isPaused: !tracks[0].enabled });
+        const track = localVideoRef.current.srcObject.getVideoTracks()[0];
+        if (track) {
+            track.enabled = !track.enabled;
+            setIsVideoOn(track.enabled);
+            socketRef.current.emit('toggleMedia', { kind: 'video', isPaused: !track.enabled });
         }
     };
 
@@ -206,7 +211,6 @@ const VideoCall = () => {
                 };
 
                 if (consumer.kind === 'video') {
-                    // Check if user already has video (then this must be a screen)
                     if (existingPeer.videoId && existingPeer.videoId !== remoteProducerId) {
                         existingPeer.screenStream = new MediaStream([consumer.track]);
                         existingPeer.screenId = remoteProducerId;
@@ -221,7 +225,6 @@ const VideoCall = () => {
                 return { ...prev, [remoteUsername]: { ...existingPeer } };
             });
 
-            // Media-level cleanup
             consumer.on('producerclose', () => handleProducerClosed(remoteProducerId));
         });
     };
@@ -297,7 +300,7 @@ const VideoCall = () => {
             <div className="state-screen">
                 <h3>Enter Your Name</h3>
                 <input type="text" placeholder="e.g. Aden" value={username} onChange={e => setUsername(e.target.value)} />
-                <button onClick={() => setIsNameSet(true)} disabled={!username}>Join Meeting</button>
+                <button onClick={() => { localStorage.setItem('preferredUsername', username); setIsNameSet(true); }} disabled={!username}>Join Meeting</button>
             </div>
         );
     }
@@ -322,13 +325,11 @@ const VideoCall = () => {
                 </div>
             </div>
             <div className={gridClass}>
-                {/* Local View */}
                 <div className={`video-container ${!isVideoOn ? 'video-off' : ''}`}>
                     <div className="name-tag">You ({username}) {!isMicOn && '🔇'}</div>
                     {!isVideoOn && <div className="avatar">{username.charAt(0).toUpperCase()}</div>}
                     <video ref={localVideoRef} autoPlay muted playsInline />
                 </div>
-                {/* Remote Views */}
                 {peerList.map((peer) => (
                     <React.Fragment key={peer.username}>
                         <div className={`video-container ${activeSpeakerName === peer.username ? 'active-speaker' : ''} ${peer.videoPaused ? 'video-off' : ''}`}>
