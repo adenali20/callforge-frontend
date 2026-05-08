@@ -10,25 +10,39 @@ const VideoCall = () => {
     const [isAuthorized, setIsAuthorized] = useState(false);
     const [error, setError] = useState(null);
     const [passcodeInput, setPasscodeInput] = useState("");
+    
+    // Persistent Username
     const [username, setUsername] = useState(localStorage.getItem('preferredUsername') || "");
     const [isNameSet, setIsNameSet] = useState(!!localStorage.getItem('preferredUsername'));
     
+    // UI States
     const [activeSpeakerName, setActiveSpeakerName] = useState(null);
     const [isMicOn, setIsMicOn] = useState(true);
     const [isVideoOn, setIsVideoOn] = useState(true);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [copySuccess, setCopySuccess] = useState(false);
+    const [canShareScreen, setCanShareScreen] = useState(false);
 
+    // Refs
     const localVideoRef = useRef();
     const socketRef = useRef();
     const deviceRef = useRef();
     const sendTransportRef = useRef();
     const recvTransportRef = useRef();
     const screenProducerRef = useRef(null);
-    const screenAudioProducerRef = useRef(null); // Track screen audio
+    const screenAudioProducerRef = useRef(null);
     
+    // Peers State: { "Name": { stream, screenStream, videoId, audioId, screenId, videoPaused, audioPaused } }
     const [peers, setPeers] = useState({}); 
 
+    // Detect if screen sharing is supported (Mobile detection)
+    useEffect(() => {
+        if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+            setCanShareScreen(true);
+        }
+    }, []);
+
+    // PHASE 1: Validate Room & Save History
     useEffect(() => {
         fetch(`https://dev.adenali.com/api/rooms/${roomId}`)
             .then(res => {
@@ -52,6 +66,7 @@ const VideoCall = () => {
         }
     }, [isNameSet, isAuthorized, roomData, roomId, username]);
 
+    // PHASE 2: Signaling Setup
     useEffect(() => {
         if (!isAuthorized || !isNameSet || !roomData) return;
 
@@ -85,20 +100,7 @@ const VideoCall = () => {
         });
 
         socketRef.current.on('producerClosed', ({ producerId }) => {
-            setPeers((prev) => {
-                const newPeers = { ...prev };
-                for (const name in newPeers) {
-                    if (newPeers[name].videoId === producerId || newPeers[name].audioId === producerId || newPeers[name].screenId === producerId) {
-                        if (newPeers[name].screenId === producerId) {
-                            newPeers[name].screenStream = null;
-                            newPeers[name].screenId = null;
-                        } else {
-                            delete newPeers[name];
-                        }
-                    }
-                }
-                return newPeers;
-            });
+            handleProducerClosed(producerId);
         });
 
         socketRef.current.on('activeSpeaker', ({ producerId }) => {
@@ -117,22 +119,33 @@ const VideoCall = () => {
         return () => socketRef.current.disconnect();
     }, [isAuthorized, isNameSet, roomData]);
 
+    const handleProducerClosed = (producerId) => {
+        setPeers((prev) => {
+            const newPeers = { ...prev };
+            for (const name in newPeers) {
+                if (newPeers[name].screenId === producerId) {
+                    newPeers[name].screenStream = null;
+                    newPeers[name].screenId = null;
+                    return { ...newPeers };
+                } 
+                if (newPeers[name].videoId === producerId || newPeers[name].audioId === producerId) {
+                    delete newPeers[name];
+                    return { ...newPeers };
+                }
+            }
+            return prev;
+        });
+    };
+
     const toggleScreenShare = async () => {
         if (!isScreenSharing) {
             try {
-                // UPDATED: Added audio constraint for screen capture
-                const stream = await navigator.mediaDevices.getDisplayMedia({ 
-                    video: true, 
-                    audio: true 
-                });
-
+                const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
                 const videoTrack = stream.getVideoTracks()[0];
                 const audioTrack = stream.getAudioTracks()[0];
 
-                // Produce Video
                 screenProducerRef.current = await sendTransportRef.current.produce({ track: videoTrack });
 
-                // UPDATED: Produce Audio if available
                 if (audioTrack) {
                     screenAudioProducerRef.current = await sendTransportRef.current.produce({ track: audioTrack });
                 }
@@ -163,20 +176,20 @@ const VideoCall = () => {
     };
 
     const toggleMic = () => {
-        const audioTrack = localVideoRef.current.srcObject.getAudioTracks()[0];
-        if (audioTrack) {
-            audioTrack.enabled = !audioTrack.enabled;
-            setIsMicOn(audioTrack.enabled);
-            socketRef.current.emit('toggleMedia', { kind: 'audio', isPaused: !audioTrack.enabled });
+        const track = localVideoRef.current.srcObject.getAudioTracks()[0];
+        if (track) {
+            track.enabled = !track.enabled;
+            setIsMicOn(track.enabled);
+            socketRef.current.emit('toggleMedia', { kind: 'audio', isPaused: !track.enabled });
         }
     };
 
     const toggleVideo = () => {
-        const videoTrack = localVideoRef.current.srcObject.getVideoTracks()[0];
-        if (videoTrack) {
-            videoTrack.enabled = !videoTrack.enabled;
-            setIsVideoOn(videoTrack.enabled);
-            socketRef.current.emit('toggleMedia', { kind: 'video', isPaused: !videoTrack.enabled });
+        const track = localVideoRef.current.srcObject.getVideoTracks()[0];
+        if (track) {
+            track.enabled = !track.enabled;
+            setIsVideoOn(track.enabled);
+            socketRef.current.emit('toggleMedia', { kind: 'video', isPaused: !track.enabled });
         }
     };
 
@@ -188,16 +201,11 @@ const VideoCall = () => {
 
             setPeers((prev) => {
                 const existingPeer = prev[remoteUsername] || { 
-                    username: remoteUsername, 
-                    stream: new MediaStream(), 
-                    screenStream: null,
-                    videoId: null, 
-                    audioId: null,
-                    screenId: null
+                    username: remoteUsername, stream: new MediaStream(), screenStream: null,
+                    videoId: null, audioId: null, screenId: null, videoPaused: false, audioPaused: false
                 };
 
                 if (consumer.kind === 'video') {
-                    // Detect if this is a screen share (secondary video producer)
                     if (existingPeer.videoId && existingPeer.videoId !== remoteProducerId) {
                         existingPeer.screenStream = new MediaStream([consumer.track]);
                         existingPeer.screenId = remoteProducerId;
@@ -206,26 +214,13 @@ const VideoCall = () => {
                         existingPeer.videoId = remoteProducerId;
                     }
                 } else {
-                    // Audio tracks are added to the main stream to ensure they play
                     existingPeer.stream.addTrack(consumer.track);
                     existingPeer.audioId = remoteProducerId;
                 }
-
                 return { ...prev, [remoteUsername]: { ...existingPeer } };
             });
 
-            consumer.on('producerclose', () => {
-                setPeers(prev => {
-                    const newPeers = { ...prev };
-                    if (newPeers[remoteUsername]?.screenId === remoteProducerId) {
-                        newPeers[remoteUsername].screenStream = null;
-                        newPeers[remoteUsername].screenId = null;
-                    } else if (newPeers[remoteUsername]?.audioId === remoteProducerId || newPeers[remoteUsername]?.videoId === remoteProducerId) {
-                        delete newPeers[remoteUsername];
-                    }
-                    return newPeers;
-                });
-            });
+            consumer.on('producerclose', () => handleProducerClosed(remoteProducerId));
         });
     };
 
@@ -240,10 +235,8 @@ const VideoCall = () => {
                 transport.on('produce', async ({ kind, rtpParameters }, callback) => {
                     socketRef.current.emit('produce', { transportId: transport.id, kind, rtpParameters }, ({ id }) => callback({ id }));
                 });
-                
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 localVideoRef.current.srcObject = stream;
-                
                 if (stream.getVideoTracks().length > 0) {
                     await transport.produce({ track: stream.getVideoTracks()[0], encodings: [{ maxBitrate: 100000, scaleResolutionDownBy: 4 }, { maxBitrate: 300000, scaleResolutionDownBy: 2 }, { maxBitrate: 900000 }] });
                 }
@@ -287,6 +280,16 @@ const VideoCall = () => {
     if (error) return <div className="state-screen">Error: {error}</div>;
     if (!roomData) return <div className="state-screen">Loading Room...</div>;
 
+    if (roomData.isSecure && !isAuthorized) {
+        return (
+            <div className="state-screen">
+                <h3>Enter Passcode</h3>
+                <input type="password" value={passcodeInput} onChange={e => setPasscodeInput(e.target.value)} />
+                <button onClick={handleVerifyPasscode}>Join Room</button>
+            </div>
+        );
+    }
+
     if (!isNameSet) {
         return (
             <div className="state-screen">
@@ -309,7 +312,9 @@ const VideoCall = () => {
                 </div>
                 <div className="controls">
                     <button onClick={copyInviteLink} className="control-btn invite-btn">{copySuccess ? '✅ Copied' : '🔗 Copy Link'}</button>
-                    <button onClick={toggleScreenShare} className={`control-btn ${isScreenSharing ? 'on' : ''}`}>{isScreenSharing ? '🛑 Stop Share' : '🖥️ Share'}</button>
+                    {canShareScreen && (
+                        <button onClick={toggleScreenShare} className={`control-btn ${isScreenSharing ? 'on' : ''}`}>{isScreenSharing ? '🛑 Stop Share' : '🖥️ Share'}</button>
+                    )}
                     <button onClick={toggleMic} className={`control-btn ${!isMicOn ? 'off' : ''}`}>{isMicOn ? '🎤 Mute' : '🎙️ Unmute'}</button>
                     <button onClick={toggleVideo} className={`control-btn ${!isVideoOn ? 'off' : ''}`}>{isVideoOn ? '📹 Stop' : '📷 Start'}</button>
                 </div>
@@ -343,7 +348,6 @@ const VideoCall = () => {
 const VideoComponent = ({ stream }) => {
     const ref = useRef();
     useEffect(() => { if (ref.current) ref.current.srcObject = stream; }, [stream]);
-    // Mute is false by default so remote audio (including screen audio) is heard
     return <video ref={ref} autoPlay playsInline />;
 };
 
