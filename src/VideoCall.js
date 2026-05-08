@@ -214,8 +214,17 @@ const VideoCall = () => {
     if (roomData.status === "EARLY") {
         return (
             <div className="state-screen">
-                <h2>Too Early!</h2>
-                <p>Meeting starts at: {new Date(roomData.startDate).toLocaleString()}</p>
+                {roomData.isNonExpiry ? (
+                    <>
+                        <h2>Starting ASAP...</h2>
+                        <p>Preparing your secure media session.</p>
+                    </>
+                ) : (
+                    <>
+                        <h2>Too Early!</h2>
+                        <p>Meeting starts at: {new Date(roomData.startDate).toLocaleString()}</p>
+                    </>
+                )}
             </div>
         );
     }

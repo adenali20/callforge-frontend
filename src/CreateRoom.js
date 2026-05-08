@@ -9,10 +9,10 @@ const CreateRoom = () => {
     isSecure: false,
     passcode: '',
     startDate: new Date().toISOString().slice(0, 16),
-    durationHours: 24
+    durationHours: 24,
+    nonExpiry: false // New field for ASAP logic
   });
 
-  // Load history from LocalStorage on mount
   useEffect(() => {
     const savedHistory = JSON.parse(localStorage.getItem('roomHistory') || '[]');
     setHistory(savedHistory);
@@ -45,7 +45,7 @@ const CreateRoom = () => {
             type="text" 
             placeholder="Room Name" 
             required 
-            style={{ padding: '10px', borderRadius: '5px', border: '1px solid #444', backgroundColor: '#333', color: 'white' }}
+            style={{ padding: '10px', borderRadius: '5px', border: '1px solid #444', backgroundColor: '#333', color: 'white' }} 
             onChange={e => setFormData({...formData, roomName: e.target.value})} 
           />
           
@@ -59,26 +59,44 @@ const CreateRoom = () => {
               type="password" 
               placeholder="Set Passcode" 
               required 
-              style={{ padding: '10px', borderRadius: '5px', border: '1px solid #444', backgroundColor: '#333', color: 'white' }}
+              style={{ padding: '10px', borderRadius: '5px', border: '1px solid #444', backgroundColor: '#333', color: 'white' }} 
               onChange={e => setFormData({...formData, passcode: e.target.value})} 
             />
           )}
 
-          <label>Start Date & Time:</label>
-          <input 
-            type="datetime-local" 
-            value={formData.startDate} 
-            style={{ padding: '10px', borderRadius: '5px', border: '1px solid #444', backgroundColor: '#333', color: 'white' }}
-            onChange={e => setFormData({...formData, startDate: e.target.value})} 
-          />
+          {/* NEW: Non-Expiry Toggle */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+            <input 
+              type="checkbox" 
+              checked={formData.nonExpiry}
+              onChange={e => setFormData({...formData, nonExpiry: e.target.checked})} 
+            />
+            Non-Expiry (Start ASAP & Never Expire)
+          </label>
 
-          <button type="submit" style={{ padding: '12px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>
+          {/* Conditional rendering for Date/Time or ASAP message */}
+          {formData.nonExpiry ? (
+            <div style={{ padding: '10px', backgroundColor: 'rgba(0, 255, 0, 0.1)', color: '#00ff00', borderRadius: '5px', fontSize: '14px', textAlign: 'center', border: '1px solid #00ff00' }}>
+              ⚡ This room will be available immediately.
+            </div>
+          ) : (
+            <>
+              <label>Start Date & Time:</label>
+              <input 
+                type="datetime-local" 
+                value={formData.startDate} 
+                style={{ padding: '10px', borderRadius: '5px', border: '1px solid #444', backgroundColor: '#333', color: 'white' }} 
+                onChange={e => setFormData({...formData, startDate: e.target.value})} 
+              />
+            </>
+          )}
+
+          <button type="submit" style={{ padding: '12px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold', marginTop: '10px' }}>
             Generate Room Link
           </button>
         </form>
       </div>
 
-      {/* --- RECENT ROOMS SECTION --- */}
       {history.length > 0 && (
         <div style={{ marginTop: '40px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -91,16 +109,9 @@ const CreateRoom = () => {
             {history.map(room => (
               <div 
                 key={room.id} 
-                onClick={() => navigate(`/room/${room.id}`)}
-                style={{ 
-                  padding: '15px', 
-                  backgroundColor: '#222', 
-                  borderRadius: '8px', 
-                  cursor: 'pointer', 
-                  border: '1px solid #333',
-                  transition: 'background 0.2s'
-                }}
-                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#2a2a2a'}
+                onClick={() => navigate(`/room/${room.id}`)} 
+                style={{ padding: '15px', backgroundColor: '#222', borderRadius: '8px', cursor: 'pointer', border: '1px solid #333', transition: 'background 0.2s' }} 
+                onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#2a2a2a'} 
                 onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#222'}
               >
                 <div style={{ fontWeight: 'bold', color: '#007bff' }}>{room.name || 'Untitled Room'}</div>
